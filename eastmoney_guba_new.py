@@ -39,7 +39,7 @@ boost = 5
 whoops = int(time.time())
 chrome_options = Options()
 chrome_options.add_argument("--headless")
-driver = webdriver.Chrome(options=chrome_options, executable_path="D:/Python/Selenium_Chrome_Driver/chromedriver.exe")
+driver = webdriver.Chrome(options=chrome_options, executable_path="./chromedriver.exe")
 driver.set_page_load_timeout(3)
 driver.set_script_timeout(3)
 
