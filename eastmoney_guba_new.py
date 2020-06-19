@@ -8,15 +8,17 @@ import random
 import traceback
 import re
 import os
+import sys
 from selenium import webdriver
 from bs4 import BeautifulSoup
+from fetch_stock_id import get_code_list
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
 
-BASE_URL = 'http://guba.eastmoney.com'
+BASE_URL = 'https://guba.eastmoney.com'
 USER_BASE_URL = "https://i.eastmoney.com"
 
 # 字段定义：[吧名称，股票代码，作者，标题，类型，ID，点击量，评论数，发帖时间，URL]
@@ -34,26 +36,61 @@ TOTAL_COMMENTS = 0
 OVERRIDE = False
 THRESHOLD = 5
 OVERRIDE_LIMIT = 5
-boost = 5
+boost = 3
+availpool = []
+
+# pth = "\\".join(__file__.split("\\")[0:-1])
+# print(pth)
+# try:
+#     sys.path.append(pth)
+# finally:
+#     print(sys.path)
+def ipGen():
+    A = 101
+    B = random.choice(range(80, 96))
+    C = random.choice(range(0, 256))
+    D = random.choice(range(0, 256))
+
+    return ".".join(str(x) for x in [A, B, C, D])
+
 
 whoops = int(time.time())
 chrome_options = Options()
 chrome_options.add_argument("--headless")
+prefs={"profile.managed_default_content_settings.images": 2}
+chrome_options.add_experimental_option("prefs", prefs)
+chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.106 Safari/537.36")
+chrome_options.add_argument("x-forwarded-for" + ipGen())
 driver = webdriver.Chrome(options=chrome_options, executable_path="./chromedriver.exe")
-driver.set_page_load_timeout(3)
-driver.set_script_timeout(3)
+driver.set_page_load_timeout(1)
+driver.set_script_timeout(1)
 
 MODE0 = 0
 MODE1 = 1
 
 
+class timeController():
+    __slots__ = ("_hi", "_no")
+
+    def sayHi(self, hi):
+        self._hi = hi
+
+    def sayNo(self, no):
+        self._no = no
+
+    def check(self, t):
+        return True if self._hi <= t <= self._no else False
+
+
 class timeBasedWriter():
     def __init__(self, basename, localTime):
         self._basename = basename
-        self._suffix = ".csv"
+        self._suffix = "/list_view.csv"
         self._time = localTime
+        mkdir(self._time)
         self._fileName = self._basename + self._time + self._suffix
         self._file = open(self._fileName, "a+", encoding="utf-8", newline="")
+        print(self._fileName)
         self._writer = csv.writer(self._file, delimiter="ǁ")
     
     def close(self):
@@ -65,7 +102,9 @@ class timeBasedWriter():
     def reload(self, localTime):
         self._file.close()
         self._time = localTime
+        mkdir(self._time)
         self._fileName = self._basename + self._time + self._suffix
+        print(self._fileName)
         self._file = open(self._fileName, "a+", encoding="utf-8", newline="")
         self._writer = csv.writer(self._file, delimiter="ǁ")
     
@@ -92,6 +131,27 @@ class timeBasedWriter():
         else:
             return False
 
+span = timeController()
+
+def insepectIP(ip_lst):
+    REQUEST_HEADER = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.106 Safari/537.36",
+        "x-forwarded-for": ipGen()}
+    header = REQUEST_HEADER
+    url = "https://www.baidu.com"
+    for ip in ip_lst:
+        proxies = {"http": "http://" + ip}
+        req = requests.get(url, headers=header, proxies=proxies)
+        if req.status_code == 200:
+            print("Available IP:", ip)
+            availpool.append(ip)
+
+
+def mkdir(dir_name):
+    try:
+        os.mkdir("./" + dir_name)
+    except FileExistsError:
+        pass
 
 def toTimeStamp(dttime):
     return int(time.mktime(time.strptime(dttime, "%Y-%m-%d %H:%M:%S")))
@@ -104,17 +164,19 @@ def toLocalTime(tgtTimeStamp):
 def fetchForumLinks(forumID, THRESHOLD, mode, VERBOSE=False):
     COUNTER = 0
     forumID = str(forumID)
-    # currentTimeStamp = int(time.time())
-    # endTimeStamp = currentTimeStamp - (currentTimeStamp % 86400)
-    # startTimeStamp = endTimeStamp - 86400
     pageNum = 1
     if os.path.exists("./"):
         pass
     if mode == MODE0:
-        hi = whoops - 300
+        hi = whoops - 7200
+        no = whoops
         # print(int(time.time()), hi)
     else:
-        hi = (whoops - (whoops % 3600)) - 3600
+        no = whoops - (whoops % 3600)
+        hi = no - 3600
+    span.sayHi(hi)
+    span.sayNo(no)
+    dir_name = toLocalTime(hi)
     json_name = "./url_list/" + str(forumID) + ".json"
     if os.path.exists(json_name) and os.path.getsize(json_name) > 0:
         # print("Loading:", json_name)
@@ -126,12 +188,16 @@ def fetchForumLinks(forumID, THRESHOLD, mode, VERBOSE=False):
     INIT_YEAR = 2020
     prevMonth = 13
     flag = True
-    writer = timeBasedWriter("./guba_general_data/guba_", toLocalTime(int(time.time())))
+    writer = timeBasedWriter("./", dir_name)
     while flag and COUNTER < THRESHOLD:
         url = BASE_URL + "/list," + forumID + "_" + str(pageNum) + ".html"
         print("Fetching URL:", url)
         COUNTER += 1
-        web_source = requests.get(url)
+        REQUEST_HEADER = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.106 Safari/537.36",
+            "x-forwarded-for": ipGen()}
+        PROXY = {"http": "http://" + random.choice(availpool)}
+        web_source = requests.get(url, headers=REQUEST_HEADER, proxies=PROXY)
         soup = BeautifulSoup(web_source.content.decode("utf-8"), "lxml")
         threadList = soup.select("#articlelistnew > div.normal_post")
         forumName = soup.select("#stockname > a")[0].get_text()
@@ -142,6 +208,11 @@ def fetchForumLinks(forumID, THRESHOLD, mode, VERBOSE=False):
                 if int(date[3:5]) > prevMonth and prevMonth == 1:
                     INIT_YEAR -= 1
                 date = str(INIT_YEAR) + "-" + date
+                if mode == MODE1 and toTimeStamp(date + ":00"):
+                    continue
+                if toTimeStamp(date + ":" + "00") < hi:
+                    flag = False
+                    break
                 category = details[2].select("em")
                 if len(category) == 0:
                     category = "discussion"
@@ -174,20 +245,19 @@ def fetchForumLinks(forumID, THRESHOLD, mode, VERBOSE=False):
                                   "link": link
                                   }
                 print(general_result)
-                if toTimeStamp(date + ":" + "00") < hi:
-                    flag = False
-                    break
                 prevMonth = int(date[5:7])
-                # filename1 = "./guba_general_data/general_" + date[-5:-2] + ".csv"
+                # filename1 = "./g_gen_" + date[-5:-2] + ".csv"
                 writer.writeRow(general_result.values(), date[:-3])
                 thread_history[general_result["identity"].split(",")[-1]] = general_result["link"]
             # print(pageNum)
         else:
+            json_file.seek(0)
             json_file.write(json.dumps(thread_history))
             break
         pageNum += 1
-        time.sleep(random.randint(1, boost))
+        time.sleep(0.1)
     writer.close()
+    json_file.seek(0)
     json_file.write(json.dumps(thread_history))
     json_file.close()
 
@@ -225,46 +295,47 @@ def FetchBodyContent(inst, testFlag = False):
                       "likes": soup.select("#like_wrap")[0].get("data-like_count") or "0",
                       "isFirst": True,
                       }
-        print(page_content)
-        if not testFlag:
-            time.sleep(random.randint(1, boost))
+        # print(page_content)
+        if span.check(toTimeStamp(page_content["postTime"])):
+            print(page_content)
             # contentWriter.writeRow(list(page_content.values()), page_content["postTime"][:-6])
-            with open("./guba_content_data/guba_content_" + page_content["postTime"][:-6] + ".csv", "a",
+            mkdir(page_content["postTime"][:-6])
+            with open("./" + page_content["postTime"][:-6] + "/body_data.csv", "a",
                       encoding="utf-8", newline="") as csvfile:
                 writer = csv.writer(csvfile, delimiter="ǁ")
                 writer.writerow(list(page_content.values()))
 
-            numcomments = int(soup.select("#stockheader > div > div > span.tc1.replyCount")[0].get_text())
-            if numcomments > 0:
-                # print("Total comments:", numcomments)
-                FetchReplies(inst, page_content["threadID"], page_content["postTime"])
-            else:
-                print("No comments, skipping.")
+        numcomments = int(soup.select("#stockheader > div > div > span.tc1.replyCount")[0].get_text())
+        if numcomments > 0:
+            # print("Total comments:", numcomments)
+            FetchReplies(inst, page_content["threadID"], page_content["postTime"])
         else:
-            print(page_content)
-            time.sleep(random.randint(1, boost))
-        global TOTAL_COMMENTS
-        TOTAL_COMMENTS += 1
+            print("No comments, skipping.")
+            global TOTAL_COMMENTS
+            TOTAL_COMMENTS += 1
     else:
         if testFlag:
             print("URL:" + url + " DOES NOT EXIST, SKIPPING............")
+    # time.sleep(random.randint(1, boost))
+    time.sleep(0.1)
     # contentWriter.close()
 
 
 def FetchReplies(inst, threadID, postTime, testFlag=False):
     global TOTAL_COMMENTS
     page_counter = 1
-    while True:
+    flag = True
+    while True and flag:
         url = inst[:-5] + "_" + str(page_counter) + ".html"
         # print(url)
         if page_counter != 1:
             try:
                 driver.get(url)
-                WebDriverWait(driver, timeout=2).until(
+                WebDriverWait(driver, timeout=1).until(
                     EC.visibility_of_any_elements_located((By.CSS_SELECTOR, "#comment_all_content > div > div")))
             except TimeoutException:
                 print("NORMAL COMMENTS: Timeout, skipping")
-        replies = driver.find_elements_by_css_selector("#comment_all_content > div > div")
+        replies = driver.find_elements_by_css_selector("#comment_all_content > div > div.level1_item")
         num_comments = len(replies)
         print("Num of NORMAL Comments:", num_comments)
         if num_comments == 0:
@@ -274,19 +345,21 @@ def FetchReplies(inst, threadID, postTime, testFlag=False):
                 reply_result = {"threadID": threadID,
                                 "replyID": replies[r].get_attribute("data-reply_id"),
                                 "title": "",
-                                "content": replies[r].find_element_by_css_selector("div > div.level1_reply_cont > \
-                                div.short_text").text.strip(),
+                                "content": replies[r].find_element_by_css_selector("div > div.level1_reply_cont > div.short_text").text.strip(),
                                 "UID": replies[r].find_element_by_css_selector("div > div.replyer_info > a")
                                 .get_attribute("data-popper"),
-                                "postTime":replies[r].find_element_by_css_selector("div > div.publish_time").text[4:23],
+                                "postTime": replies[r].find_element_by_css_selector("div > div.publish_time").text[4:23],
                                 "likes": replies[r].get_attribute("data-reply_like_count") or "0",
                                 "isFirst": False,
                                }
                 # print(postTime, reply_result["postTime"])
-                print("Replied within 5 DAYS:", toTimeStamp(reply_result["postTime"]) - toTimeStamp(postTime) <= 432000)
-                print(reply_result)
-                if not testFlag and (toTimeStamp(reply_result["postTime"]) - toTimeStamp(postTime) <= 432000):
-                    with open("./guba_content_data/guba_content_" + reply_result["postTime"][:-6] + ".csv", "a",
+                # print("Replied within 5 DAYS:", abs(toTimeStamp(reply_result["postTime"]) - toTimeStamp(postTime)) <= 432000)
+                # print(reply_result)
+                if span.check(toTimeStamp(reply_result["postTime"])) and \
+                        (toTimeStamp(reply_result["postTime"]) - toTimeStamp(postTime) <= 432000):
+                    print(reply_result)
+                    mkdir(reply_result["postTime"][:-6])
+                    with open("./" + reply_result["postTime"][:-6] + "/body_data.csv", "a",
                               encoding="utf-8", newline="") as csvfile:
                         writer = csv.writer(csvfile, delimiter="ǁ")
                         writer.writerow(list(reply_result.values()))
@@ -308,16 +381,22 @@ def FetchReplies(inst, threadID, postTime, testFlag=False):
                         ujf.close()
                     TOTAL_COMMENTS += 1
                 else:
-                    pass
+                    flag = False
+                    break
         page_counter += 1
         if num_comments < 30:
             break
-        time.sleep(random.randrange(1, boost))
+        # time.sleep(random.randrange(1))
+        time.sleep(0.5)
 
 
 def fetchUserById(uid, ttt):
     url = USER_BASE_URL + "/" + str(uid)
-    web_source = requests.get(url)
+    REQUEST_HEADER = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.106 Safari/537.36",
+        "x-forwarded-for": ipGen()}
+    PROXY = {"http": "http://" + random.choice(availpool)}
+    web_source = requests.get(url, headers=REQUEST_HEADER, proxies=PROXY)
     soup = BeautifulSoup(web_source.content.decode("utf-8"), "lxml")
     views = soup.select("#others > div > div.others_top > div.others_content > div.others_info > p")[0].select("span")
     user_data = {
@@ -329,7 +408,8 @@ def fetchUserById(uid, ttt):
         "total_view": views[0].get_text(),
         "today_view": views[1].get_text()
     }
-    with open("./user_data/user_" + ttt + ".csv", "a", encoding="utf-8", newline="") as csvfile:
+    mkdir(ttt)
+    with open("./" + ttt + "/user_data.csv", "a", encoding="utf-8", newline="") as csvfile:
         writer = csv.writer(csvfile, delimiter="ǁ")
         writer.writerow(list(user_data.values()))
 
@@ -339,7 +419,8 @@ def ufsr(fn):
     with open(fn1, "r") as f:
         fjs = json.load(f)
         for k in fjs.keys():
-            fetchUserById(k, fn[5:-4])
+            fetchUserById(k, fn[:-5])
+            time.sleep(0.1)
 
 
 def generalFetcher(forumList, mode, VERBOSE=False):
@@ -363,7 +444,13 @@ if __name__ == "__main__":
     try:
         sf = open("stockid.csv", "r", encoding="utf-8")
         lissy = csv.reader(sf)
-        sli = list(lissy)[0][:100]
+        # lissy = get_code_list()
+        # print(lissy)
+        sli = list(lissy)[0][:50]
+        ipsrc = requests.get("http://www.66ip.cn/mo.php?sxb=&tqsl=30&port=&export=&ktip=&sxa=&submit=%CC%E1++%C8%A1&textarea=")
+        ip_soup = BeautifulSoup(ipsrc.content.decode("gbk"), "lxml")
+        ip_lst = ip_soup.select("body")[0].text.replace("\r\n\t\t", " ").strip().split(" ")
+        insepectIP(ip_lst)
         generalFetcher(forumList=sli, mode=MODE0, VERBOSE=False)
         bodyFetcher(forumList=sli)
         for ul in os.listdir("./user_list"):
@@ -372,4 +459,9 @@ if __name__ == "__main__":
     except Exception as err:
         print(err)
         print(traceback.print_exc())
+    finally:
         driver.quit()
+        for f in os.listdir("./user_list/"):
+            os.remove("./user_list/" + f)
+        for f in os.listdir("./url_list/"):
+            os.remove("./url_list/" + f)
